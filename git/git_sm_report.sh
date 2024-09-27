@@ -2,7 +2,7 @@
 set -e  # Exit on error
 
 # git_sm_report.sh
-# BDunbar for Maxar
+# BDunba
 # reports on git submodule state
 
 echo "Submodule Status Report" 
