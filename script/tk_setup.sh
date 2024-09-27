@@ -1,6 +1,6 @@
 #!/bin/bash -e
 # tk_setup.sh
-# Brian Dunbar for Maxar
+# Brian Dunbar
 # assumes work happens in ~/workspace/fsw
 # - Change WORKSPACE to another value if desired
 # tk_setup.sh xxxx
