@@ -1,0 +1,13 @@
+# Makefile to install Ansible and run the setup playbook
+.PHONy: install_ansible  run_playbook all
+
+install_ansible:
+	sudo yum install -y ansible
+
+run_playbook:
+	ansible-playbook ws_run.yml -i localhost.ini --ask-become-pass
+
+install_collection:
+	ansible-galaxy install -r galaxy.yml
+
+all: install_ansible run_playbook

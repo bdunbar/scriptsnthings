@@ -1,0 +1,517 @@
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+  GIT_LFS_SKIP_SMUDGE: 1
+  RUNNER_ENV: dev
+  DEPT: fsw
+  PROJECT: augustus
+  CLUSTER: lightweight
+  ARCH: amd64
+
+  IMAGE_CI_TOOLS: irad/augustus/tools:ci-tools
+  IMAGE_CFS_GROUND_IMAGE: irad/augustus/cfs-ground
+  IMAGE_CMDUTIL_IMAGE: irad/augustus/cmdutil
+  IMAGE_SIMDEV: irad/augustus/simdev
+
+workflow:
+  rules:
+    # don't run detached MR pipelines
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+
+    # main, release branches and tags run on prod
+    - if: $CI_COMMIT_BRANCH =~ /main/ || $CI_COMMIT_BRANCH =~ /.*release.*/ || $CI_COMMIT_TAG != null || $RUNNER_ENV == "prod"
+      variables:
+        RUNNER_ENV: prod
+        AWS_REGISTRY: $AWS_PROD_REGISTRY
+
+    # development branches run on stage
+    - if: $CI_COMMIT_BRANCH =~ /.*development.*/ || $RUNNER_ENV == "stage"
+      variables:
+        RUNNER_ENV: stage
+        AWS_REGISTRY: $AWS_STAGE_REGISTRY
+
+    # feature branches run on dev
+    - if: $RUNNER_ENV == "dev"
+      variables:
+        RUNNER_ENV: dev
+        AWS_REGISTRY: $AWS_DEV_REGISTRY
+
+    - when: always
+
+
+stages:
+ - build
+
+.registry-login: &registry-login
+  script:
+    # ecr login
+    - aws ecr get-login-password --region $AWS_REGION |
+        docker login
+            --username AWS
+            --password-stdin $AWS_REGISTRY
+
+#######################
+# base anchor
+#######################
+.base: &base
+  stage: build
+  tags:
+    - env=$RUNNER_ENV
+    - project=$PROJECT
+    - dept=$DEPT
+    - cluster=$CLUSTER
+    - arch=$ARCH
+
+#######################
+# image builder anchor
+#######################
+.builder: &builder
+  <<: *base
+  image: $AWS_REGISTRY/irad/augustus/tools:ci-tools
+  before_script:
+    !reference [.registry-login, script]
+  needs:
+    - job: ci-tools
+      optional: true
+
+#######################
+# anchor for PetaLinux image builds
+#######################
+.petalinux: &petalinux
+    <<: *builder
+    timeout: 3 hours
+    script:
+      - export IMAGE_NAME=$AWS_REGISTRY/irad/augustus/petalinux:$PETALINUX_VER
+
+      # build the image
+      - pushd images/petalinux
+      - docker build 
+          --build-arg PETALINUX_VER=$PETALINUX_VER
+          -t $IMAGE_NAME
+          .
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+
+#######################
+# anchor for Vitis image builds
+#######################
+.vitis: &vitis
+    <<: *builder
+    timeout: 2 hours
+    script:
+      - export IMAGE_NAME=$AWS_REGISTRY/irad/augustus/vitis:$VITIS_VER
+
+      # build the image
+      - pushd images/vitis
+      - docker build 
+          --build-arg VITIS_VER=$VITIS_VER
+          -t $IMAGE_NAME
+          .
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+
+#######################
+# anchor for Vivado image builds
+#######################
+.vivado: &vivado
+    <<: *builder
+    timeout: 8 hours
+    script:
+      - export IMAGE_NAME=$AWS_REGISTRY/irad/augustus/vivado:$VIVADO_VER
+      - pushd images/vivado
+
+      # diagnostics
+      - docker images
+      - df -h
+
+      # monitor disk size
+      - timeout 8h 
+        bash -c 'while true; do df -h; sleep 5m; done' &
+
+      # build the image
+      - docker build 
+          --build-arg VIVADO_VER=$VIVADO_VER 
+          --build-arg USERNAME=$XILINX_USERNAME 
+          --build-arg PASSWORD=$XILINX_PASSWORD
+          -t $IMAGE_NAME
+          .
+
+      - docker images
+      - df -h
+
+      # cleanup
+      - killall timeout || true
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+
+#######################
+# anchor for Libero image builds
+#######################
+
+.libero: &libero
+    <<: *builder
+    timeout: 8 hours
+    before_script:
+      - yum install -y 
+          psmisc 
+          python3-pip
+      - pip3 install awscli
+
+      # login to the registry
+      - aws ecr get-login-password --region $AWS_REGION |
+          buildah login
+              --username AWS
+              --password-stdin $AWS_REGISTRY
+
+    script:
+      - export IMAGE_NAME=$AWS_REGISTRY/irad/augustus/libero:$LIBERO_VER
+      - pushd images/libero
+
+      # diagnostics
+      - buildah images
+      - df -h
+
+      # monitor disk size
+      - timeout 8h 
+        bash -c 'while true; do df -h; sleep 5m; done' &
+
+      # build the image
+      - buildah bud 
+          --build-arg LIBERO_VER=$LIBERO_VER 
+          --build-arg INSTALL_USER=$LIBERO_USERNAME
+          -t $IMAGE_NAME
+          .
+
+      - buildah images
+      - df -h
+
+      # cleanup
+      - killall timeout || true
+
+      # publish the image
+      - buildah images
+      - buildah push $IMAGE_NAME
+
+    tags:
+      - env=$RUNNER_ENV
+      - project=$PROJECT
+      - dept=$DEPT
+      - cluster=heavyweight
+      - arch=amd64
+
+#######################
+# Images for specific toolchain versions
+#######################
+
+petalinux-2020.2:
+    <<: *petalinux
+    variables:
+      PETALINUX_VER: "2020.2"
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+
+petalinux-2021.2:
+    <<: *petalinux
+    variables:
+      PETALINUX_VER: "2021.2"
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+
+petalinux-2022.2:
+    <<: *petalinux
+    variables:
+      PETALINUX_VER: "2022.2"
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+
+vitis-2021.2:
+    <<: *vitis
+    variables:
+      VITIS_VER: "2021.2"
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+
+vivado-2022.2:
+    <<: *vivado
+    variables:
+      VIVADO_VER: "2022.2"
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+
+      # override default disk allocation because vivado is ginormous
+      KUBERNETES_EPHEMERAL_STORAGE_REQUEST: 400Gi
+
+libero-2022.3:
+    <<: *libero
+    variables:
+      LIBERO_VER: "2022.3"
+      LIBERO_USERNAME: "dev"
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+
+libero-2023.2:
+    <<: *libero
+    variables:
+      LIBERO_VER: "2023.2"
+      LIBERO_USERNAME: "dev"
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+
+libero-2024.1:
+    <<: *libero
+    variables:
+      LIBERO_VER: "2024.1"
+      LIBERO_USERNAME: "dev"
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+
+vorago:
+    <<: *builder
+    variables:
+      GIT_LFS_SKIP_SMUDGE: 0
+      CLUSTER: heavyweight
+    script:
+      - export IMAGE_NAME_BASE=irad/augustus/vorago
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}
+
+      # make sure the repository exists that we're going to push to
+      - aws ecr create-repository --repository-name $IMAGE_NAME_BASE || true
+
+      # build the image
+      - pushd images/vorago
+      - docker build 
+          -t $IMAGE_NAME
+          .
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+
+riscv:
+    <<: *builder
+    variables:
+      CLUSTER: heavyweight
+    script:
+      - export IMAGE_NAME_BASE=irad/augustus/riscv
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}
+
+      # make sure the repository exists that we're going to push to
+      - aws ecr create-repository --repository-name $IMAGE_NAME_BASE || true
+
+      # build the image
+      - pushd images/riscv
+      - docker build 
+          -t $IMAGE_NAME
+          .
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+
+#######################
+# CI Tools
+#######################
+
+.ci-tools-base: &ci-tools-base
+  <<: *base
+  image: quay.io/buildah/stable:v${BUILDAH_VER}
+  timeout: 1 hours
+  before_script:
+    - yum install -y python3-pip file jq
+
+    # pyyaml requires special handling
+    - pip3 install
+      wheel==0.40.0
+    - pip3 install --no-build-isolation
+      PyYAML==5.4.1
+      "Cython<3.0"
+    - pip3 install awscli
+
+    - cp images/ci-tools/fake-docker /usr/local/bin/docker
+
+    - !reference [.registry-login, script]
+  variables:
+    BUILDAH_VER: "1.29.0"
+
+ci-tools.image:
+    <<: *ci-tools-base
+    script:
+      - export ARCH_TAG=$ARCH
+      - if [[ $ARCH == arm64 ]]; then export ARCH_TAG=arm64v8; fi
+      - export IMAGE_NAME_BASE=$IMAGE_CI_TOOLS
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}-${ARCH_TAG}
+
+      # test fake-docker's save/load
+      - docker pull public.ecr.aws/ubuntu/ubuntu:jammy 
+      - docker pull public.ecr.aws/docker/library/centos:7 
+      - docker pull public.ecr.aws/docker/library/busybox:1.36
+      - docker save public.ecr.aws/ubuntu/ubuntu:jammy -o single.tar
+      - file single.tar
+      - docker save 
+          public.ecr.aws/ubuntu/ubuntu:jammy 
+          public.ecr.aws/docker/library/centos:7 
+          public.ecr.aws/docker/library/busybox:1.36
+          -o multi.tar
+      - file multi.tar
+      - docker load -i single.tar
+
+      # build the image
+      - pushd images/ci-tools
+      - docker build 
+          --build-arg BUILDAH_VER=$BUILDAH_VER
+          -t $IMAGE_NAME
+          .
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+    parallel:
+      matrix:
+        - ARCH: [ amd64, arm64 ]
+
+ci-tools:
+    <<: *ci-tools-base
+    needs: [ ci-tools.image ]
+    script:
+      - export IMAGE_NAME_BASE=$IMAGE_CI_TOOLS
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}
+
+      # make a manifest image
+      - echo "making manifest"
+      - docker manifest create $IMAGE_NAME $IMAGE_NAME-amd64 $IMAGE_NAME-arm64v8
+      - docker manifest inspect $IMAGE_NAME
+      - docker manifest push $IMAGE_NAME
+
+#######################
+# CFS Ground Base Image
+#######################
+
+cfs-ground-base.image:
+    <<: *builder
+    script:
+      - export ARCH_TAG=$ARCH
+      - if [[ $ARCH == arm64 ]]; then export ARCH_TAG=arm64v8; fi
+      - export IMAGE_NAME_BASE=$IMAGE_CFS_GROUND_IMAGE
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}:base-${ARCH_TAG}
+
+      # make sure the repository exists that we're going to push to
+      - aws ecr create-repository --repository-name $IMAGE_NAME_BASE || true
+
+      # build the image
+      - pushd images/cfs-ground-base
+      - docker build 
+          --build-arg PYTHON_VER=$PYTHON_VER
+          -t $IMAGE_NAME
+          .
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+
+    parallel:
+      matrix:
+        - ARCH: [ amd64, arm64 ]
+
+cfs-ground-base:
+    <<: *builder
+    needs: [ cfs-ground-base.image ]
+    script:
+      - export IMAGE_NAME_BASE=$IMAGE_CFS_GROUND_IMAGE
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}:base
+
+      # make a manifest image
+      - echo "making manifest"
+      - docker manifest create $IMAGE_NAME $IMAGE_NAME-amd64 $IMAGE_NAME-arm64v8
+      - docker manifest inspect $IMAGE_NAME
+      - docker manifest push $IMAGE_NAME
+
+#######################
+# CmdUtil Base Image
+#######################
+
+cmdutil-base.image:
+    <<: *builder
+    script:
+      - export ARCH_TAG=$ARCH
+      - if [[ $ARCH == arm64 ]]; then export ARCH_TAG=arm64v8; fi
+      - export IMAGE_NAME_BASE=$IMAGE_CMDUTIL_IMAGE
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}:base-${ARCH_TAG}
+
+      # make sure the repository exists that we're going to push to
+      - aws ecr create-repository --repository-name $IMAGE_NAME_BASE || true
+
+      # build the image
+      - pushd images/cmdutil-base
+      - docker build 
+          --build-arg PYTHON_VER=$PYTHON_VER
+          -t $IMAGE_NAME
+          .
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+
+    parallel:
+      matrix:
+        - ARCH: [ amd64, arm64 ]
+
+cmdutil-base:
+    <<: *builder
+    needs: [ cmdutil-base.image ]
+    script:
+      - export IMAGE_NAME_BASE=$IMAGE_CMDUTIL_IMAGE
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}:base
+
+      # make a manifest image
+      - echo "making manifest"
+      - docker manifest create $IMAGE_NAME $IMAGE_NAME-amd64 $IMAGE_NAME-arm64v8
+      - docker manifest inspect $IMAGE_NAME
+      - docker manifest push $IMAGE_NAME
+
+#######################
+# simdev image
+#######################
+
+simdev.image:
+    <<: *builder
+    script:
+      - export ARCH_TAG=$ARCH
+      - if [[ $ARCH == arm64 ]]; then export ARCH_TAG=arm64v8; fi
+      - export IMAGE_NAME_BASE=$IMAGE_SIMDEV
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}:${ARCH_TAG}
+
+      # make sure the repository exists that we're going to push to
+      - aws ecr create-repository --repository-name $IMAGE_NAME_BASE || true
+
+      # build the image
+      - pushd images/simdev
+      - docker build 
+          -t $IMAGE_NAME
+          .
+
+      # publish the image
+      - docker images
+      - docker push $IMAGE_NAME
+
+    parallel:
+      matrix:
+        - ARCH: [ amd64, arm64 ]
+
+simdev:
+    <<: *builder
+    needs: [ simdev.image ]
+    script:
+      - export IMAGE_NAME_BASE=$IMAGE_SIMDEV
+      - export IMAGE_NAME=${AWS_REGISTRY}/${IMAGE_NAME_BASE}
+
+      # make a manifest image
+      - echo "making manifest"
+      - docker manifest create $IMAGE_NAME $IMAGE_NAME:amd64 $IMAGE_NAME:arm64v8
+      - docker manifest inspect $IMAGE_NAME
+      - docker manifest push $IMAGE_NAME

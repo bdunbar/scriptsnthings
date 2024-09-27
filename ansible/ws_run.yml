@@ -1,0 +1,123 @@
+---
+- hosts: local
+  become: yes
+  vars_files:
+    - ws_setup.yml
+
+  tasks:
+
+    - name: "Get SUDO_USER"
+      set_fact:
+        original_user: "{{ ansible_env.SUDO_USER }}"
+    
+    - name: "Set user_home variable"
+      set_fact:
+        user_home: "/home/{{ ansible_env.SUDO_USER }}"
+
+    - name: "Install software packages"
+      ansible.builtin.package:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ software_packages }}"
+      when: software_packages is defined and software_packages | length > 0
+
+    - name: "Install yum groups"
+      ansible.builtin.yum:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ yum_groups }}"
+      when: yum_groups is defined and yum_groups | length > 0
+
+    - name: "Install {{ lcov_rpm }} from {{ lcov_url }}"
+      ansible.builtin.yum:
+        name: "{{ lcov_url }}"
+        state: present
+
+    - name: "Maintain lcov symbolic links - one"
+      ansible.builtin.file:
+        src: /usr/bin/gcc10-gcov
+        dest: /usr/local/bin/gcov
+        state: link
+ 
+    - name: "Update bashrc"
+      lineinfile:
+        path: "~/.bashrc"
+        line: "{{ bashrc_line }}"
+        create: yes
+        state: present
+      when: bashrc_line is defined and bashrc_line != ''
+
+    - name: "Install gimme-aws-creds"
+      ansible.builtin.pip:
+        name: gimme-aws-creds
+        executable: pip3
+
+    - name: "Install glab 1.33"
+      ansible.builtin.package:
+        name: package/glab_1.33.0_Linux_x86_64.rpm
+        state: present
+     
+    - name: "Okta auth file"
+      ansible.builtin.template:
+        src: okta_aws_login_config.j2
+        dest: "{{ home_directory }}/.okta_aws_login_config"
+        owner: "{{ original_user }}"
+
+    - name: "Manage AWS Preferences"
+      ansible.builtin.template:
+        src: aws_profile.j2
+        dest: "{{ home_directory }}/.aws/config"
+        owner: "{{ original_user }}"
+
+    # this would be prettier using dconf module  
+    - name: "Manage number of desktops"
+      ansible.builtin.command: "gsettings set org.mate.Marco.general num-workspaces {{ number_marco_workspaces }}"
+      become_user: "{{ original_user }}"
+
+    - name: "Manage Docker group"
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: "Add user to Docker group"
+      ansible.builtin.user:
+        name: "{{ ansible_env.SUDO_USER }}"
+        groups: docker
+        append: yes
+
+    - name: "Enable service Docker"
+      ansible.builtin.service:
+        name: docker.service
+        enabled: yes
+
+    - name: "Start service Docker"
+      ansible.builtin.service:
+        name: docker.service
+        state: started
+
+    - name: "Gitlab Runner - Manage gitlab-runner"
+      ansible.builtin.yum:
+        name: "{{ gitlab_runner_url }}"
+        state: absent
+
+    - name: "Gitlab Runner - Manage user"
+      ansible.builtin.user:
+        name: gitlab-runner
+        comment: 'Gitlab Runner'
+        shell: /bin/bash
+        state: absent
+
+    - name: "Install git lfs {{ gitlfs_url }}"
+      ansible.builtin.yum:
+        name: "{{ gitlfs_url }}"
+        state: present
+
+# TODO figure out why this is not idempotent.
+#    - ansible.builtin.shell: "grep '[filter \"lfs\"]' /home/{{original_user}}/.gitconfig 2>/dev/null | wc -l"
+#      register: result
+#      changed_when: false
+
+#    - ansible.builtin.command: git lfs install
+#      when: result.stdout == '0'
+    
+      
