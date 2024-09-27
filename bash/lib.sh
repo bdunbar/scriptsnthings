@@ -1,6 +1,6 @@
 #!/bin/bash
 # lib.sh
-# Brian Dunbar for Maxar
+# Brian Dunbar
 # bash library
 
 # USAGE
