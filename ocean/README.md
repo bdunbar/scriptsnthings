@@ -41,14 +41,3 @@ pip install pandas   # inside a venv is best
 python personality_engine.py```
 
 ---
-
-## Command
-
-| Command        | What it does                                                             |
-|-----------------|-------------------------------------------------------------------------|
-| `new NAME`      | First‑time TIPI interview for **NAME**.                                 |
-| `next NAME`     | Apply drift to **NAME**, rescore, and print any flags & events.         |
-| `list`          | Show every character stored in `personality_state.csv`.                 |
-| `reset NAME`    | Delete **NAME** from the CSV (start over).                              |
-| `help`          | Show help text.                                                         |
-| `quit` / `exit` | Leave the program.                                                      |
