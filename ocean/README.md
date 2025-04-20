@@ -40,6 +40,8 @@ cd your‑repo
 pip install pandas   # inside a venv is best
 python personality_engine.py```
 
+---
+
 ## Command
 
 | Command        | What it does                                                             |
