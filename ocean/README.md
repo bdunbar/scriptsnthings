@@ -38,8 +38,9 @@ prompts (think of them as lightweight “plot oracles”).
 git clone
 cd your‑repo
 pip install pandas   # inside a venv is best
-python personality_engine.py
+python personality_engine.py```
 
+## Command
 
 | Command        | What it does                                                             |
 |-----------------|-------------------------------------------------------------------------|
